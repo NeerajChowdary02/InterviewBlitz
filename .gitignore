@@ -1,0 +1,36 @@
+# Maven build output
+target/
+*.class
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Eclipse
+.project
+.classpath
+.settings/
+bin/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Secrets and local config — never commit these
+.env
+application-local.properties
+application-prod.properties
+
+# Log files
+*.log
+logs/
+
+# Spring Boot devtools restart trigger
+.reloadtrigger
