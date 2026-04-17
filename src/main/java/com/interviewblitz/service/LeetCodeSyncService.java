@@ -2,10 +2,12 @@ package com.interviewblitz.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.interviewblitz.model.Problem;
 import com.interviewblitz.repository.ProblemRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -13,13 +15,18 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Fetches a user's solved LeetCode problems from the LeetCode GraphQL API and
- * stores new ones in the local database. Existing problems (matched by leetcodeId)
- * are skipped to avoid duplicate rows. A short delay between detail fetches prevents
- * the LeetCode API from rate-limiting us.
+ * stores new ones in the local database.
+ *
+ * Uses two queries:
+ *   1. matchedUser — get the total accepted-problem count to know how many pages to request.
+ *   2. problemsetQuestionList (paginated, filter status=AC) — returns questionId, title,
+ *      titleSlug, difficulty, and topicTags all in one shot, so no second detail-fetch
+ *      round-trip is needed.
+ *
+ * Problems already present in the database (matched by leetcodeId) are skipped.
  */
 @Service
 public class LeetCodeSyncService {
@@ -27,27 +34,40 @@ public class LeetCodeSyncService {
     private static final Logger log = LoggerFactory.getLogger(LeetCodeSyncService.class);
 
     private static final String LEETCODE_GRAPHQL_URL = "https://leetcode.com/graphql";
+    private static final int PAGE_SIZE = 50;
 
-    // GraphQL query to get the list of problems the user has solved recently
-    private static final String RECENT_AC_QUERY =
-            "{ \"query\": \"query { recentAcSubmissionList(username: \\\"%s\\\", limit: 500) { title titleSlug } }\" }";
+    // Query 1: total accepted-problem count, used to determine how many pages to fetch
+    private static final String TOTAL_SOLVED_QUERY =
+            "{ \"query\": \"query { matchedUser(username: \\\"%s\\\") { submitStatsGlobal { acSubmissionNum { difficulty count } } } }\" }";
 
-    // GraphQL query to get detail (difficulty, topic tags, content) for a single problem
-    private static final String PROBLEM_DETAIL_QUERY =
-            "{ \"query\": \"query { question(titleSlug: \\\"%s\\\") { questionId title difficulty topicTags { name } content } }\" }";
+    // Query 2: paginated solved problem list — returns full metadata so no detail fetch is needed
+    private static final String PROBLEMSET_QUERY =
+            "query problemsetQuestionList($categorySlug: String, $limit: Int, $skip: Int, $filters: QuestionListFilterInput) { " +
+            "problemsetQuestionList: questionList(categorySlug: $categorySlug, limit: $limit, skip: $skip, filters: $filters) { " +
+            "total: totalNum questions: data { questionId title titleSlug difficulty topicTags { name } status } } }";
 
     private final WebClient webClient;
     private final ProblemRepository problemRepository;
     private final ObjectMapper objectMapper;
 
+    /** LeetCode session cookie value — injected from LEETCODE_SESSION env var. */
+    @Value("${leetcode.session:}")
+    private String leetcodeSession;
+
+    /** LeetCode CSRF token — injected from LEETCODE_CSRF env var. */
+    @Value("${leetcode.csrftoken:}")
+    private String leetcodeCsrfToken;
+
     public LeetCodeSyncService(ProblemRepository problemRepository) {
         this.problemRepository = problemRepository;
         this.objectMapper = new ObjectMapper();
-        // LeetCode requires a realistic User-Agent header, otherwise it blocks requests
+        // LeetCode blocks requests that don't look like they come from a real browser.
+        // Base headers go here; auth headers are added per-request so @Value fields
+        // are guaranteed to be populated before any request is sent.
         this.webClient = WebClient.builder()
                 .baseUrl(LEETCODE_GRAPHQL_URL)
                 .defaultHeader("Content-Type", "application/json")
-                .defaultHeader("User-Agent", "Mozilla/5.0 (compatible; InterviewBlitz/1.0)")
+                .defaultHeader("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 .defaultHeader("Referer", "https://leetcode.com")
                 .build();
     }
@@ -59,155 +79,217 @@ public class LeetCodeSyncService {
     public int syncProblemsFromLeetCode(String username) {
         log.info("Starting LeetCode sync for user: {}", username);
 
-        List<String> titleSlugs = fetchSolvedProblemSlugs(username);
-        if (titleSlugs.isEmpty()) {
-            log.warn("No solved problems found for user: {}", username);
+        int totalSolved = fetchTotalSolvedCount(username);
+        if (totalSolved == 0) {
+            log.warn("No solved problems found (or could not reach LeetCode API) for user: {}", username);
             return 0;
         }
+        log.info("Total accepted problems for {}: {}", username, totalSolved);
 
-        int newProblemsAdded = 0;
-        for (String titleSlug : titleSlugs) {
-            try {
-                boolean saved = fetchAndSaveProblemDetails(titleSlug);
-                if (saved) {
-                    newProblemsAdded++;
-                }
-                // Pause between requests to avoid triggering LeetCode's rate limiter
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("Sync interrupted while processing: {}", titleSlug);
-                break;
-            } catch (Exception e) {
-                log.error("Failed to process problem: {} — skipping. Error: {}", titleSlug, e.getMessage());
-            }
-        }
+        int newProblemsAdded = fetchAndSaveAllSolvedProblems(totalSolved);
 
         log.info("Sync complete for {}. New problems added: {}", username, newProblemsAdded);
         return newProblemsAdded;
     }
 
     /**
-     * Calls the LeetCode GraphQL API to get the list of title slugs for all
-     * recently accepted submissions by this user (up to 500).
+     * Paginates through problemsetQuestionList (AC filter) until all solved problems are
+     * saved. Returns the total count of new rows inserted across all pages.
      */
-    List<String> fetchSolvedProblemSlugs(String username) {
-        String query = String.format(RECENT_AC_QUERY, username);
+    int fetchAndSaveAllSolvedProblems(int totalSolved) {
+        int newProblemsAdded = 0;
+        int skip = 0;
 
+        while (skip < totalSolved) {
+            int savedInBatch = fetchAndSaveProblemBatch(skip, PAGE_SIZE);
+            newProblemsAdded += savedInBatch;
+
+            log.info("Batch skip={}: saved {} new problems (running total: {})",
+                    skip, savedInBatch, newProblemsAdded);
+
+            skip += PAGE_SIZE;
+        }
+
+        return newProblemsAdded;
+    }
+
+    /**
+     * Fetches one page of solved problems from problemsetQuestionList and saves any
+     * that are not already in the database. Returns the count of new rows saved.
+     */
+    int fetchAndSaveProblemBatch(int skip, int limit) {
         try {
-            String response = webClient.post()
-                    .bodyValue(query)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
-
-            return parseTitleSlugsFromResponse(response);
+            String requestBody = buildProblemsetRequestBody(skip, limit);
+            String response = postGraphQL(requestBody);
+            log.debug("problemsetQuestionList raw response (skip={}): {}", skip, response);
+            return parseBatchAndSave(response);
         } catch (WebClientResponseException e) {
-            log.error("LeetCode API returned HTTP {}: {}", e.getStatusCode(), e.getMessage());
-            throw new RuntimeException("LeetCode API error: " + e.getStatusCode(), e);
+            log.error("LeetCode API returned HTTP {} fetching batch skip={}: {}",
+                    e.getStatusCode(), skip, e.getMessage());
+            return 0;
         } catch (Exception e) {
-            log.error("Failed to reach LeetCode API: {}", e.getMessage());
-            throw new RuntimeException("Could not connect to LeetCode API", e);
+            log.error("Failed to fetch/save batch at skip={}: {}", skip, e.getMessage());
+            return 0;
         }
     }
 
     /**
-     * Parses the list of title slugs out of the recentAcSubmissionList GraphQL response.
+     * Builds the JSON request body for problemsetQuestionList.
+     * Uses Jackson to construct the object so the variables sub-object is serialised
+     * correctly — string formatting is not reliable for nested JSON.
      */
-    List<String> parseTitleSlugsFromResponse(String responseBody) {
-        List<String> slugs = new ArrayList<>();
+    String buildProblemsetRequestBody(int skip, int limit) throws Exception {
+        ObjectNode filters = objectMapper.createObjectNode();
+        filters.put("status", "AC");
+
+        ObjectNode variables = objectMapper.createObjectNode();
+        variables.put("categorySlug", "");
+        variables.put("skip", skip);
+        variables.put("limit", limit);
+        variables.set("filters", filters);
+
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("query", PROBLEMSET_QUERY);
+        body.set("variables", variables);
+
+        return objectMapper.writeValueAsString(body);
+    }
+
+    /**
+     * Parses a problemsetQuestionList response, saves each problem that isn't already
+     * in the database, and returns the count of new rows inserted.
+     */
+    int parseBatchAndSave(String responseBody) {
+        int saved = 0;
         try {
             JsonNode root = objectMapper.readTree(responseBody);
-            JsonNode submissions = root.path("data").path("recentAcSubmissionList");
+            JsonNode questions = root.path("data")
+                    .path("problemsetQuestionList")
+                    .path("questions");
 
-            // Deduplicate: the same problem can appear multiple times in submission history
-            List<String> seen = new ArrayList<>();
-            for (JsonNode submission : submissions) {
-                String slug = submission.path("titleSlug").asText();
-                if (!slug.isEmpty() && !seen.contains(slug)) {
-                    seen.add(slug);
-                    slugs.add(slug);
+            if (questions.isMissingNode() || !questions.isArray()) {
+                log.warn("problemsetQuestionList response contained no questions array");
+                return 0;
+            }
+
+            for (JsonNode q : questions) {
+                String rawId = q.path("questionId").asText();
+                if (rawId.isEmpty() || rawId.equals("null")) {
+                    log.warn("Skipping problem with missing questionId");
+                    continue;
+                }
+
+                int leetcodeId;
+                try {
+                    leetcodeId = Integer.parseInt(rawId);
+                } catch (NumberFormatException e) {
+                    log.warn("Could not parse questionId '{}' as integer — skipping", rawId);
+                    continue;
+                }
+
+                // Skip problems already stored
+                if (problemRepository.findByLeetcodeId(leetcodeId).isPresent()) {
+                    log.debug("Problem {} already synced — skipping", leetcodeId);
+                    continue;
+                }
+
+                Problem problem = new Problem();
+                problem.setLeetcodeId(leetcodeId);
+                problem.setTitle(q.path("title").asText());
+                problem.setDifficulty(q.path("difficulty").asText());
+                problem.setTopic(extractPrimaryTopic(q.path("topicTags")));
+                problem.setSyncedAt(LocalDateTime.now());
+                // titleSlug stored in description until a dedicated column is added in Phase 2
+                problem.setDescription(q.path("titleSlug").asText());
+
+                problemRepository.save(problem);
+                log.info("Saved new problem: [{}] {}", leetcodeId, problem.getTitle());
+                saved++;
+            }
+
+        } catch (Exception e) {
+            log.error("Failed to parse batch response: {}", e.getMessage());
+        }
+        return saved;
+    }
+
+    /**
+     * Calls matchedUser to get the total count of accepted (AC) problems for this user.
+     * Returns 0 if the query fails or the user doesn't exist.
+     */
+    int fetchTotalSolvedCount(String username) {
+        String query = String.format(TOTAL_SOLVED_QUERY, username);
+        try {
+            String response = postGraphQL(query);
+            log.debug("Total solved count raw response: {}", response);
+            return parseTotalSolvedCount(response);
+        } catch (Exception e) {
+            log.error("Failed to fetch total solved count for {}: {}", username, e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * Parses the total number of accepted problems out of the matchedUser response.
+     * Uses the "All" difficulty bucket directly; sums Easy + Medium + Hard as a fallback.
+     */
+    int parseTotalSolvedCount(String responseBody) {
+        try {
+            JsonNode root = objectMapper.readTree(responseBody);
+            JsonNode acNums = root.path("data")
+                    .path("matchedUser")
+                    .path("submitStatsGlobal")
+                    .path("acSubmissionNum");
+
+            if (acNums.isMissingNode() || !acNums.isArray()) {
+                log.warn("Could not find acSubmissionNum in response");
+                return 0;
+            }
+
+            for (JsonNode entry : acNums) {
+                if ("All".equals(entry.path("difficulty").asText())) {
+                    return entry.path("count").asInt(0);
                 }
             }
+
+            // No "All" bucket — sum the individual difficulty counts
+            int total = 0;
+            for (JsonNode entry : acNums) {
+                total += entry.path("count").asInt(0);
+            }
+            return total;
+
         } catch (Exception e) {
-            log.error("Failed to parse submission list response: {}", e.getMessage());
+            log.error("Failed to parse total solved count: {}", e.getMessage());
+            return 0;
         }
-        return slugs;
     }
 
     /**
-     * Fetches full details for one problem by its title slug, then saves it to the
-     * database if it hasn't been synced before. Returns true if a new row was inserted.
+     * Sends a pre-serialised JSON body to the LeetCode GraphQL endpoint,
+     * attaching the session cookie and CSRF token on every request.
      */
-    boolean fetchAndSaveProblemDetails(String titleSlug) {
-        String query = String.format(PROBLEM_DETAIL_QUERY, titleSlug);
-
-        try {
-            String response = webClient.post()
-                    .bodyValue(query)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
-
-            return parseProblemAndSave(response);
-        } catch (WebClientResponseException e) {
-            log.error("Failed to fetch details for {}: HTTP {}", titleSlug, e.getStatusCode());
-            return false;
-        }
+    private String postGraphQL(String requestBody) {
+        return webClient.post()
+                .header("Cookie", buildCookieHeader())
+                .header("x-csrftoken", leetcodeCsrfToken)
+                .bodyValue(requestBody)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
     }
 
     /**
-     * Parses the problem detail GraphQL response and saves to DB.
-     * Skips if the problem already exists (by leetcodeId).
+     * Builds the Cookie header value that authenticates requests to LeetCode.
+     * LeetCode requires both the session token and the CSRF token in the cookie jar.
      */
-    boolean parseProblemAndSave(String responseBody) {
-        try {
-            JsonNode root = objectMapper.readTree(responseBody);
-            JsonNode question = root.path("data").path("question");
-
-            if (question.isMissingNode() || question.isNull()) {
-                log.warn("GraphQL response contained no question data");
-                return false;
-            }
-
-            String rawId = question.path("questionId").asText();
-            if (rawId.isEmpty() || rawId.equals("null")) {
-                log.warn("Problem has no questionId — skipping");
-                return false;
-            }
-
-            int leetcodeId = Integer.parseInt(rawId);
-
-            // Skip if already in the database
-            if (problemRepository.findByLeetcodeId(leetcodeId).isPresent()) {
-                log.debug("Problem {} already synced — skipping", leetcodeId);
-                return false;
-            }
-
-            Problem problem = new Problem();
-            problem.setLeetcodeId(leetcodeId);
-            problem.setTitle(question.path("title").asText());
-            problem.setDifficulty(question.path("difficulty").asText());
-            problem.setDescription(question.path("content").asText());
-            problem.setTopic(extractPrimaryTopic(question.path("topicTags")));
-            problem.setSyncedAt(LocalDateTime.now());
-
-            problemRepository.save(problem);
-            log.info("Saved new problem: [{}] {}", leetcodeId, problem.getTitle());
-            return true;
-
-        } catch (NumberFormatException e) {
-            log.error("Could not parse questionId as integer: {}", e.getMessage());
-            return false;
-        } catch (Exception e) {
-            log.error("Error parsing problem detail response: {}", e.getMessage());
-            return false;
-        }
+    private String buildCookieHeader() {
+        return "LEETCODE_SESSION=" + leetcodeSession + "; csrftoken=" + leetcodeCsrfToken;
     }
 
     /**
-     * Iterates through a problem's topic tags and returns the first one that matches
-     * a known simplified category. Falls back to "other" if nothing matches.
+     * Iterates through a problem's topic tags and returns the first one that maps
+     * to a known simplified category. Falls back to "other" if nothing matches.
      */
     String extractPrimaryTopic(JsonNode topicTagsNode) {
         if (topicTagsNode.isMissingNode() || !topicTagsNode.isArray()) {
@@ -223,10 +305,6 @@ public class LeetCodeSyncService {
             }
         }
 
-        // No known tag found — fall back to the first tag's mapped value (which is "other")
-        if (topicTagsNode.size() > 0) {
-            return "other";
-        }
         return "other";
     }
 

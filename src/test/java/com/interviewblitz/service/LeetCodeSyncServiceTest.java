@@ -1,5 +1,6 @@
 package com.interviewblitz.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.interviewblitz.model.Problem;
 import com.interviewblitz.repository.ProblemRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -8,17 +9,18 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for LeetCodeSyncService.
- * Tests topic-tag mapping, deduplication logic, and response parsing.
- * The WebClient is not called here — these tests only exercise pure Java logic.
+ * Covers topic-tag mapping, total-count parsing, batch save logic,
+ * request body construction, and error handling.
+ * The WebClient is not exercised — all tests work against pure Java methods.
  */
 @ExtendWith(MockitoExtension.class)
 class LeetCodeSyncServiceTest {
@@ -150,188 +152,306 @@ class LeetCodeSyncServiceTest {
     }
 
     // -----------------------------------------------------------------------
-    // Duplicate detection tests
+    // Total solved count parsing (matchedUser query)
     // -----------------------------------------------------------------------
 
     @Test
-    void shouldSkipProblemThatAlreadyExistsInDatabase() {
-        // Simulate a problem already stored by returning a non-empty Optional
+    void shouldParseTotalSolvedCountFromAllDifficultyBucket() {
+        String response = """
+                {
+                  "data": {
+                    "matchedUser": {
+                      "submitStatsGlobal": {
+                        "acSubmissionNum": [
+                          {"difficulty": "All",    "count": 241},
+                          {"difficulty": "Easy",   "count": 70},
+                          {"difficulty": "Medium", "count": 145},
+                          {"difficulty": "Hard",   "count": 26}
+                        ]
+                      }
+                    }
+                  }
+                }
+                """;
+
+        assertThat(syncService.parseTotalSolvedCount(response)).isEqualTo(241);
+    }
+
+    @Test
+    void shouldSumDifficultiesWhenNoAllBucketPresent() {
+        String response = """
+                {
+                  "data": {
+                    "matchedUser": {
+                      "submitStatsGlobal": {
+                        "acSubmissionNum": [
+                          {"difficulty": "Easy",   "count": 70},
+                          {"difficulty": "Medium", "count": 145},
+                          {"difficulty": "Hard",   "count": 26}
+                        ]
+                      }
+                    }
+                  }
+                }
+                """;
+
+        assertThat(syncService.parseTotalSolvedCount(response)).isEqualTo(241);
+    }
+
+    @Test
+    void shouldReturnZeroWhenTotalCountResponseIsMalformed() {
+        assertThat(syncService.parseTotalSolvedCount("not valid json")).isEqualTo(0);
+    }
+
+    @Test
+    void shouldReturnZeroWhenMatchedUserIsNull() {
+        assertThat(syncService.parseTotalSolvedCount(
+                "{ \"data\": { \"matchedUser\": null } }")).isEqualTo(0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Request body construction (problemsetQuestionList)
+    // -----------------------------------------------------------------------
+
+    @Test
+    void shouldBuildProblemsetRequestBodyWithCorrectVariables() throws Exception {
+        String body = syncService.buildProblemsetRequestBody(50, 50);
+
+        ObjectMapper mapper = new ObjectMapper();
+        var root = mapper.readTree(body);
+
+        // The query field must be present
+        assertThat(root.path("query").asText()).isNotEmpty();
+
+        // Variables must carry the correct skip, limit, and AC filter
+        var vars = root.path("variables");
+        assertThat(vars.path("skip").asInt()).isEqualTo(50);
+        assertThat(vars.path("limit").asInt()).isEqualTo(50);
+        assertThat(vars.path("categorySlug").asText()).isEqualTo("");
+        assertThat(vars.path("filters").path("status").asText()).isEqualTo("AC");
+    }
+
+    @Test
+    void shouldBuildProblemsetRequestBodyWithZeroSkipOnFirstPage() throws Exception {
+        String body = syncService.buildProblemsetRequestBody(0, 50);
+
+        var root = new ObjectMapper().readTree(body);
+        assertThat(root.path("variables").path("skip").asInt()).isEqualTo(0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch parse-and-save (problemsetQuestionList response)
+    // -----------------------------------------------------------------------
+
+    @Test
+    void shouldSaveNewProblemsFromBatchResponse() {
+        when(problemRepository.findByLeetcodeId(anyInt())).thenReturn(Optional.empty());
+        when(problemRepository.save(any(Problem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        String response = """
+                {
+                  "data": {
+                    "problemsetQuestionList": {
+                      "total": 241,
+                      "questions": [
+                        {
+                          "questionId": "1",
+                          "title": "Two Sum",
+                          "titleSlug": "two-sum",
+                          "difficulty": "Easy",
+                          "topicTags": [{"name": "Array"}],
+                          "status": "ac"
+                        },
+                        {
+                          "questionId": "2",
+                          "title": "Add Two Numbers",
+                          "titleSlug": "add-two-numbers",
+                          "difficulty": "Medium",
+                          "topicTags": [{"name": "Linked List"}],
+                          "status": "ac"
+                        }
+                      ]
+                    }
+                  }
+                }
+                """;
+
+        int saved = syncService.parseBatchAndSave(response);
+
+        assertThat(saved).isEqualTo(2);
+        verify(problemRepository, times(2)).save(any(Problem.class));
+    }
+
+    @Test
+    void shouldSkipAlreadySyncedProblemsInBatch() {
+        // Problem 1 already exists; problem 2 is new
+        Problem existing = new Problem();
+        existing.setLeetcodeId(1);
+        when(problemRepository.findByLeetcodeId(1)).thenReturn(Optional.of(existing));
+        when(problemRepository.findByLeetcodeId(2)).thenReturn(Optional.empty());
+        when(problemRepository.save(any(Problem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        String response = """
+                {
+                  "data": {
+                    "problemsetQuestionList": {
+                      "total": 2,
+                      "questions": [
+                        {
+                          "questionId": "1",
+                          "title": "Two Sum",
+                          "titleSlug": "two-sum",
+                          "difficulty": "Easy",
+                          "topicTags": [{"name": "Array"}],
+                          "status": "ac"
+                        },
+                        {
+                          "questionId": "2",
+                          "title": "Add Two Numbers",
+                          "titleSlug": "add-two-numbers",
+                          "difficulty": "Medium",
+                          "topicTags": [{"name": "Linked List"}],
+                          "status": "ac"
+                        }
+                      ]
+                    }
+                  }
+                }
+                """;
+
+        int saved = syncService.parseBatchAndSave(response);
+
+        assertThat(saved).isEqualTo(1);
+        // Only problem 2 should have been saved
+        verify(problemRepository, times(1)).save(any(Problem.class));
+    }
+
+    @Test
+    void shouldReturnZeroWhenAllProblemsInBatchAlreadySynced() {
         Problem existing = new Problem();
         existing.setLeetcodeId(1);
         when(problemRepository.findByLeetcodeId(1)).thenReturn(Optional.of(existing));
 
-        String responseWithExistingProblem = """
-                {
-                  "data": {
-                    "question": {
-                      "questionId": "1",
-                      "title": "Two Sum",
-                      "difficulty": "Easy",
-                      "topicTags": [{"name": "Array"}],
-                      "content": "Given an array..."
-                    }
-                  }
-                }
-                """;
-
-        boolean saved = syncService.parseProblemAndSave(responseWithExistingProblem);
-
-        assertThat(saved).isFalse();
-        // The repository save method should never be called for a duplicate
-        verify(problemRepository, never()).save(any(Problem.class));
-    }
-
-    @Test
-    void shouldSaveNewProblemThatIsNotInDatabase() {
-        // Simulate no existing problem found
-        when(problemRepository.findByLeetcodeId(anyInt())).thenReturn(Optional.empty());
-        when(problemRepository.save(any(Problem.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        String responseWithNewProblem = """
-                {
-                  "data": {
-                    "question": {
-                      "questionId": "1",
-                      "title": "Two Sum",
-                      "difficulty": "Easy",
-                      "topicTags": [{"name": "Array"}, {"name": "Hash Table"}],
-                      "content": "Given an array..."
-                    }
-                  }
-                }
-                """;
-
-        boolean saved = syncService.parseProblemAndSave(responseWithNewProblem);
-
-        assertThat(saved).isTrue();
-        verify(problemRepository, times(1)).save(any(Problem.class));
-    }
-
-    // -----------------------------------------------------------------------
-    // Error handling / bad data tests
-    // -----------------------------------------------------------------------
-
-    @Test
-    void shouldReturnFalseWhenResponseHasNoQuestionData() {
-        String emptyResponse = "{ \"data\": { \"question\": null } }";
-
-        boolean saved = syncService.parseProblemAndSave(emptyResponse);
-
-        assertThat(saved).isFalse();
-        verify(problemRepository, never()).save(any(Problem.class));
-    }
-
-    @Test
-    void shouldReturnFalseWhenResponseIsMalformedJson() {
-        String malformedJson = "not-valid-json{{{{";
-
-        boolean saved = syncService.parseProblemAndSave(malformedJson);
-
-        assertThat(saved).isFalse();
-        verify(problemRepository, never()).save(any(Problem.class));
-    }
-
-    @Test
-    void shouldReturnFalseWhenQuestionIdIsMissing() {
-        String responseWithoutId = """
-                {
-                  "data": {
-                    "question": {
-                      "questionId": "",
-                      "title": "Two Sum",
-                      "difficulty": "Easy",
-                      "topicTags": [],
-                      "content": "..."
-                    }
-                  }
-                }
-                """;
-
-        boolean saved = syncService.parseProblemAndSave(responseWithoutId);
-
-        assertThat(saved).isFalse();
-    }
-
-    // -----------------------------------------------------------------------
-    // Slug parsing tests
-    // -----------------------------------------------------------------------
-
-    @Test
-    void shouldParseTitleSlugsFromValidSubmissionResponse() {
         String response = """
                 {
                   "data": {
-                    "recentAcSubmissionList": [
-                      {"title": "Two Sum", "titleSlug": "two-sum"},
-                      {"title": "Reverse Linked List", "titleSlug": "reverse-linked-list"}
-                    ]
+                    "problemsetQuestionList": {
+                      "total": 1,
+                      "questions": [
+                        {
+                          "questionId": "1",
+                          "title": "Two Sum",
+                          "titleSlug": "two-sum",
+                          "difficulty": "Easy",
+                          "topicTags": [{"name": "Array"}],
+                          "status": "ac"
+                        }
+                      ]
+                    }
                   }
                 }
                 """;
 
-        List<String> slugs = syncService.parseTitleSlugsFromResponse(response);
-
-        assertThat(slugs).containsExactly("two-sum", "reverse-linked-list");
+        assertThat(syncService.parseBatchAndSave(response)).isEqualTo(0);
+        verify(problemRepository, never()).save(any(Problem.class));
     }
 
     @Test
-    void shouldDeduplicateSlugsFromSubmissionResponse() {
-        // The same problem can appear multiple times in submission history
+    void shouldReturnZeroWhenBatchResponseHasNoQuestions() {
         String response = """
                 {
                   "data": {
-                    "recentAcSubmissionList": [
-                      {"title": "Two Sum", "titleSlug": "two-sum"},
-                      {"title": "Two Sum", "titleSlug": "two-sum"},
-                      {"title": "Reverse Linked List", "titleSlug": "reverse-linked-list"}
-                    ]
+                    "problemsetQuestionList": {
+                      "total": 0,
+                      "questions": []
+                    }
                   }
                 }
                 """;
 
-        List<String> slugs = syncService.parseTitleSlugsFromResponse(response);
-
-        assertThat(slugs).hasSize(2);
-        assertThat(slugs).containsExactly("two-sum", "reverse-linked-list");
+        assertThat(syncService.parseBatchAndSave(response)).isEqualTo(0);
+        verify(problemRepository, never()).save(any(Problem.class));
     }
 
     @Test
-    void shouldReturnEmptyListWhenSubmissionResponseIsMalformed() {
-        String malformedResponse = "{ bad json }";
-
-        List<String> slugs = syncService.parseTitleSlugsFromResponse(malformedResponse);
-
-        assertThat(slugs).isEmpty();
+    void shouldReturnZeroWhenBatchResponseIsMalformedJson() {
+        assertThat(syncService.parseBatchAndSave("not valid json{{")).isEqualTo(0);
+        verify(problemRepository, never()).save(any(Problem.class));
     }
 
     @Test
-    void shouldUsePrimaryTopicFromFirstKnownTag() {
-        // Problem has Array first but also BFS — should pick "arrays" since it comes first
+    void shouldSaveCorrectFieldsFromBatchResponse() {
         when(problemRepository.findByLeetcodeId(anyInt())).thenReturn(Optional.empty());
         when(problemRepository.save(any(Problem.class))).thenAnswer(inv -> inv.getArgument(0));
 
         String response = """
                 {
                   "data": {
-                    "question": {
-                      "questionId": "200",
-                      "title": "Number of Islands",
-                      "difficulty": "Medium",
-                      "topicTags": [
-                        {"name": "Breadth-First Search"},
-                        {"name": "Dynamic Programming"}
-                      ],
-                      "content": "..."
+                    "problemsetQuestionList": {
+                      "total": 1,
+                      "questions": [
+                        {
+                          "questionId": "200",
+                          "title": "Number of Islands",
+                          "titleSlug": "number-of-islands",
+                          "difficulty": "Medium",
+                          "topicTags": [
+                            {"name": "Breadth-First Search"},
+                            {"name": "Dynamic Programming"}
+                          ],
+                          "status": "ac"
+                        }
+                      ]
                     }
                   }
                 }
                 """;
 
-        syncService.parseProblemAndSave(response);
+        syncService.parseBatchAndSave(response);
 
-        // Verify the saved problem uses the first resolvable tag
         verify(problemRepository).save(argThat(problem ->
-                "graphs".equals(problem.getTopic())
+                problem.getLeetcodeId() == 200
+                && "Number of Islands".equals(problem.getTitle())
+                && "Medium".equals(problem.getDifficulty())
+                && "graphs".equals(problem.getTopic())   // BFS maps to graphs
         ));
+    }
+
+    @Test
+    void shouldSkipProblemsWithMissingQuestionIdInBatch() {
+        when(problemRepository.findByLeetcodeId(anyInt())).thenReturn(Optional.empty());
+        when(problemRepository.save(any(Problem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        String response = """
+                {
+                  "data": {
+                    "problemsetQuestionList": {
+                      "total": 2,
+                      "questions": [
+                        {
+                          "questionId": "",
+                          "title": "Bad Problem",
+                          "titleSlug": "bad-problem",
+                          "difficulty": "Easy",
+                          "topicTags": [],
+                          "status": "ac"
+                        },
+                        {
+                          "questionId": "1",
+                          "title": "Two Sum",
+                          "titleSlug": "two-sum",
+                          "difficulty": "Easy",
+                          "topicTags": [{"name": "Array"}],
+                          "status": "ac"
+                        }
+                      ]
+                    }
+                  }
+                }
+                """;
+
+        int saved = syncService.parseBatchAndSave(response);
+
+        assertThat(saved).isEqualTo(1);
     }
 }
