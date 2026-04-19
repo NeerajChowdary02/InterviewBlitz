@@ -29,4 +29,7 @@ public interface UserProgressRepository extends JpaRepository<UserProgress, Long
      * struggles with most. Used by the weak-areas stats endpoint.
      */
     List<UserProgress> findTop10ByOrderByEaseFactorAsc();
+
+    /** Count of problems whose review date is on or before the given date — used by the due-count endpoint. */
+    long countByNextReviewDateLessThanEqual(LocalDate date);
 }
