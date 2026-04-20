@@ -10,6 +10,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -36,119 +37,185 @@ class LeetCodeSyncServiceTest {
     }
 
     // -----------------------------------------------------------------------
-    // Topic mapping tests
+    // NeetCode category mapping — resolveNeetCodeCategory(Set<String>)
     // -----------------------------------------------------------------------
 
     @Test
-    void shouldMapTreeTagToTreesTopic() {
-        assertThat(syncService.mapTopicTag("Tree")).isEqualTo("trees");
+    void shouldMapSlidingWindowTagToSlidingWindow() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Sliding Window", "Array")))
+                .isEqualTo("Sliding Window");
     }
 
     @Test
-    void shouldMapBinaryTreeTagToTreesTopic() {
-        assertThat(syncService.mapTopicTag("Binary Tree")).isEqualTo("trees");
+    void shouldMapTwoPointersTagToTwoPointers() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Two Pointers", "Array")))
+                .isEqualTo("Two Pointers");
     }
 
     @Test
-    void shouldMapBinarySearchTreeTagToTreesTopic() {
-        assertThat(syncService.mapTopicTag("Binary Search Tree")).isEqualTo("trees");
+    void shouldMapHeapTagToHeapPriorityQueue() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Heap (Priority Queue)", "Array")))
+                .isEqualTo("Heap / Priority Queue");
     }
 
     @Test
-    void shouldMapDynamicProgrammingTagToDpTopic() {
-        assertThat(syncService.mapTopicTag("Dynamic Programming")).isEqualTo("dp");
+    void shouldMapTrieTagToTries() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Trie")))
+                .isEqualTo("Tries");
     }
 
     @Test
-    void shouldMapGraphTagToGraphsTopic() {
-        assertThat(syncService.mapTopicTag("Graph")).isEqualTo("graphs");
+    void shouldMapBacktrackingTagToBacktracking() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Backtracking", "Array")))
+                .isEqualTo("Backtracking");
     }
 
     @Test
-    void shouldMapBreadthFirstSearchTagToGraphsTopic() {
-        assertThat(syncService.mapTopicTag("Breadth-First Search")).isEqualTo("graphs");
+    void shouldMapBitManipulationTagToBitManipulation() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Bit Manipulation")))
+                .isEqualTo("Bit Manipulation");
     }
 
     @Test
-    void shouldMapDepthFirstSearchTagToGraphsTopic() {
-        assertThat(syncService.mapTopicTag("Depth-First Search")).isEqualTo("graphs");
+    void shouldMapGreedyTagToGreedy() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Greedy", "Array")))
+                .isEqualTo("Greedy");
     }
 
     @Test
-    void shouldMapArrayTagToArraysTopic() {
-        assertThat(syncService.mapTopicTag("Array")).isEqualTo("arrays");
+    void shouldMapShortestPathTagToAdvancedGraphs() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Shortest Path", "Graph")))
+                .isEqualTo("Advanced Graphs");
     }
 
     @Test
-    void shouldMapHashTableTagToArraysTopic() {
-        assertThat(syncService.mapTopicTag("Hash Table")).isEqualTo("arrays");
+    void shouldMapGraphTagToGraphs() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Graph", "Depth-First Search")))
+                .isEqualTo("Graphs");
     }
 
     @Test
-    void shouldMapTwoPointersTagToTwoPointersTopic() {
-        assertThat(syncService.mapTopicTag("Two Pointers")).isEqualTo("two-pointers");
+    void shouldMapUnionFindTagToGraphs() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Union Find")))
+                .isEqualTo("Graphs");
     }
 
     @Test
-    void shouldMapSlidingWindowTagToSlidingWindowTopic() {
-        assertThat(syncService.mapTopicTag("Sliding Window")).isEqualTo("sliding-window");
+    void shouldMapTopologicalSortTagToGraphs() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Topological Sort")))
+                .isEqualTo("Graphs");
     }
 
     @Test
-    void shouldMapStackTagToStacksTopic() {
-        assertThat(syncService.mapTopicTag("Stack")).isEqualTo("stacks");
+    void shouldNotMapBfsAloneToGraphs() {
+        // BFS by itself is not enough — tree problems also use BFS
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Breadth-First Search")))
+                .isNotEqualTo("Graphs");
     }
 
     @Test
-    void shouldMapMonotonicStackTagToStacksTopic() {
-        assertThat(syncService.mapTopicTag("Monotonic Stack")).isEqualTo("stacks");
+    void shouldNotMapDfsAloneToGraphs() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Depth-First Search")))
+                .isNotEqualTo("Graphs");
     }
 
     @Test
-    void shouldMapLinkedListTagToLinkedListsTopic() {
-        assertThat(syncService.mapTopicTag("Linked List")).isEqualTo("linked-lists");
+    void shouldMapTreeTagToTrees() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Tree", "Depth-First Search")))
+                .isEqualTo("Trees");
     }
 
     @Test
-    void shouldMapBinarySearchTagToBinarySearchTopic() {
-        assertThat(syncService.mapTopicTag("Binary Search")).isEqualTo("binary-search");
+    void shouldMapBinarySearchTreeTagToTrees() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Binary Search Tree")))
+                .isEqualTo("Trees");
     }
 
     @Test
-    void shouldMapHeapTagToHeapsTopic() {
-        assertThat(syncService.mapTopicTag("Heap (Priority Queue)")).isEqualTo("heaps");
+    void shouldMapLinkedListTagToLinkedList() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Linked List")))
+                .isEqualTo("Linked List");
     }
 
     @Test
-    void shouldMapBacktrackingTagToBacktrackingTopic() {
-        assertThat(syncService.mapTopicTag("Backtracking")).isEqualTo("backtracking");
+    void shouldMapBinarySearchTagToBinarySearch() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Binary Search", "Array")))
+                .isEqualTo("Binary Search");
     }
 
     @Test
-    void shouldMapGreedyTagToGreedyTopic() {
-        assertThat(syncService.mapTopicTag("Greedy")).isEqualTo("greedy");
+    void shouldMapStackTagToStack() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Stack")))
+                .isEqualTo("Stack");
     }
 
     @Test
-    void shouldMapTrieTagToTriesTopic() {
-        assertThat(syncService.mapTopicTag("Trie")).isEqualTo("tries");
+    void shouldMapMonotonicStackTagToStack() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Monotonic Stack", "Array")))
+                .isEqualTo("Stack");
     }
 
     @Test
-    void shouldMapUnionFindTagToUnionFindTopic() {
-        assertThat(syncService.mapTopicTag("Union Find")).isEqualTo("union-find");
+    void shouldMapDpWithoutMatrixToOneDimensionalDp() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Dynamic Programming", "Array")))
+                .isEqualTo("1-D Dynamic Programming");
     }
 
     @Test
-    void shouldMapSortingTagToSortingTopic() {
-        assertThat(syncService.mapTopicTag("Sorting")).isEqualTo("sorting");
+    void shouldMapDpWithMatrixToTwoDimensionalDp() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Dynamic Programming", "Matrix")))
+                .isEqualTo("2-D Dynamic Programming");
     }
 
     @Test
-    void shouldMapUnknownTagToOtherTopic() {
-        assertThat(syncService.mapTopicTag("Geometry")).isEqualTo("other");
-        assertThat(syncService.mapTopicTag("Number Theory")).isEqualTo("other");
-        assertThat(syncService.mapTopicTag("")).isEqualTo("other");
+    void shouldMapMathTagToMathAndGeometry() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Math")))
+                .isEqualTo("Math & Geometry");
+    }
+
+    @Test
+    void shouldMapGeometryAndNumberTheoryTagsToMathAndGeometry() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Geometry")))
+                .isEqualTo("Math & Geometry");
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Number Theory")))
+                .isEqualTo("Math & Geometry");
+    }
+
+    @Test
+    void shouldMapArrayTagToArraysAndHashing() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Array")))
+                .isEqualTo("Arrays & Hashing");
+    }
+
+    @Test
+    void shouldMapHashTableTagToArraysAndHashing() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Hash Table")))
+                .isEqualTo("Arrays & Hashing");
+    }
+
+    @Test
+    void shouldReturnOtherForEmptyTagSet() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of()))
+                .isEqualTo("Other");
+    }
+
+    @Test
+    void shouldReturnOtherForUnrecognisedTags() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Recursion", "Memoization")))
+                .isEqualTo("Other");
+    }
+
+    @Test
+    void shouldPreferSlidingWindowOverArraysAndHashing() {
+        // A problem tagged [Array, Sliding Window] must land in Sliding Window, not Arrays & Hashing
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Array", "Sliding Window")))
+                .isEqualTo("Sliding Window");
+    }
+
+    @Test
+    void shouldPreferSpecificCategoryOverArraysAndHashingForHeap() {
+        assertThat(syncService.resolveNeetCodeCategory(Set.of("Array", "Heap (Priority Queue)")))
+                .isEqualTo("Heap / Priority Queue");
     }
 
     // -----------------------------------------------------------------------
@@ -396,8 +463,8 @@ class LeetCodeSyncServiceTest {
                           "titleSlug": "number-of-islands",
                           "difficulty": "Medium",
                           "topicTags": [
-                            {"name": "Breadth-First Search"},
-                            {"name": "Dynamic Programming"}
+                            {"name": "Graph"},
+                            {"name": "Depth-First Search"}
                           ],
                           "status": "ac"
                         }
@@ -413,7 +480,7 @@ class LeetCodeSyncServiceTest {
                 problem.getLeetcodeId() == 200
                 && "Number of Islands".equals(problem.getTitle())
                 && "Medium".equals(problem.getDifficulty())
-                && "graphs".equals(problem.getTopic())   // BFS maps to graphs
+                && "Graphs".equals(problem.getTopic())   // Graph tag maps to Graphs
         ));
     }
 

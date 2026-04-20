@@ -38,3 +38,6 @@ PROJECT_CONTEXT.md
 PHASE1_PROMPT.md
 PHASE2_PROMPT.md
 PHASE3_PROMPT.md
+
+# Claude Code local settings (tool permissions, not for version control)
+.claude/
