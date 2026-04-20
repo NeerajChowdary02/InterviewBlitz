@@ -125,13 +125,15 @@ public class StatsService {
     }
 
     /**
-     * Returns the 5 topics with the lowest accuracy among those that have been
-     * attempted at least once, ordered worst-first. Used to surface where the
-     * user needs the most practice.
+     * Returns up to 5 topics that the user is genuinely struggling with, ordered
+     * worst-first. A topic qualifies as weak only when it has been reviewed at least
+     * 3 times (enough signal to be meaningful) AND its accuracy is below 70%.
+     * Topics with 100% accuracy — or any accuracy ≥ 70% — are never shown as weak,
+     * regardless of how many problems remain unreviewed in that topic.
      */
     public List<TopicStatsDto> getWeakAreas() {
         return getTopicStats().stream()
-                .filter(dto -> dto.getReviewed() > 0)
+                .filter(dto -> dto.getReviewed() >= 3 && dto.getAccuracy() < 0.70)
                 .sorted(Comparator.comparingDouble(TopicStatsDto::getAccuracy))
                 .limit(5)
                 .collect(Collectors.toList());

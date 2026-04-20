@@ -207,35 +207,84 @@ class StatsServiceTest {
 
     @Test
     void shouldReturnWeakAreasOrderedByLowestAccuracyFirst() {
-        Problem p1 = problem(1L, "trees");
-        Problem p2 = problem(2L, "dp");
-        Problem p3 = problem(3L, "graphs");
+        // 3 problems per topic so reviewed == 3 (meets the minimum-sample threshold)
+        Problem t1 = problem(1L, "trees"); Problem t2 = problem(2L, "trees"); Problem t3 = problem(3L, "trees");
+        Problem g1 = problem(4L, "graphs"); Problem g2 = problem(5L, "graphs"); Problem g3 = problem(6L, "graphs");
 
-        // trees=30%, dp=80%, graphs=50%
-        UserProgress up1 = progressForProblem(p1, 10, 3, 2.5, 0);
-        UserProgress up2 = progressForProblem(p2, 10, 8, 2.5, 0);
-        UserProgress up3 = progressForProblem(p3, 10, 5, 2.5, 0);
+        // trees ≈ 30%, graphs ≈ 50% — both below 70% threshold
+        List<UserProgress> progress = List.of(
+                progressForProblem(t1, 10, 3, 2.5, 0),
+                progressForProblem(t2, 10, 3, 2.5, 0),
+                progressForProblem(t3, 10, 3, 2.5, 0),
+                progressForProblem(g1, 10, 5, 2.5, 0),
+                progressForProblem(g2, 10, 5, 2.5, 0),
+                progressForProblem(g3, 10, 5, 2.5, 0));
 
-        when(problemRepository.findAll()).thenReturn(List.of(p1, p2, p3));
-        when(userProgressRepository.findAll()).thenReturn(List.of(up1, up2, up3));
+        when(problemRepository.findAll()).thenReturn(List.of(t1, t2, t3, g1, g2, g3));
+        when(userProgressRepository.findAll()).thenReturn(progress);
 
         List<TopicStatsDto> weakAreas = statsService.getWeakAreas();
 
+        assertThat(weakAreas).hasSize(2);
         assertThat(weakAreas.get(0).getTopic()).isEqualTo("trees");   // 30% — worst
         assertThat(weakAreas.get(1).getTopic()).isEqualTo("graphs");  // 50%
-        assertThat(weakAreas.get(2).getTopic()).isEqualTo("dp");      // 80%
+    }
+
+    @Test
+    void shouldExcludeTopicsWithHighAccuracyFromWeakAreas() {
+        // Two topics, both with 3 reviewed problems — only the one below 70% should appear
+        Problem lo1 = problem(1L, "trees"); Problem lo2 = problem(2L, "trees"); Problem lo3 = problem(3L, "trees");
+        Problem hi1 = problem(4L, "dp");   Problem hi2 = problem(5L, "dp");   Problem hi3 = problem(6L, "dp");
+
+        List<UserProgress> progress = List.of(
+                progressForProblem(lo1, 10, 4, 2.5, 0),   // trees: 40%
+                progressForProblem(lo2, 10, 4, 2.5, 0),
+                progressForProblem(lo3, 10, 4, 2.5, 0),
+                progressForProblem(hi1, 10, 8, 2.5, 0),   // dp: 80% — not weak
+                progressForProblem(hi2, 10, 8, 2.5, 0),
+                progressForProblem(hi3, 10, 8, 2.5, 0));
+
+        when(problemRepository.findAll()).thenReturn(List.of(lo1, lo2, lo3, hi1, hi2, hi3));
+        when(userProgressRepository.findAll()).thenReturn(progress);
+
+        List<TopicStatsDto> weakAreas = statsService.getWeakAreas();
+
+        assertThat(weakAreas).hasSize(1);
+        assertThat(weakAreas.get(0).getTopic()).isEqualTo("trees");
+    }
+
+    @Test
+    void shouldExcludeTopicsWithFewerThanThreeReviewedProblems() {
+        // Only 2 problems reviewed — not enough signal, should not appear as weak
+        Problem p1 = problem(1L, "trees");
+        Problem p2 = problem(2L, "trees");
+
+        List<UserProgress> progress = List.of(
+                progressForProblem(p1, 10, 1, 2.5, 0),   // 10% accuracy — would qualify if reviewed >= 3
+                progressForProblem(p2, 10, 1, 2.5, 0));
+
+        when(problemRepository.findAll()).thenReturn(List.of(p1, p2));
+        when(userProgressRepository.findAll()).thenReturn(progress);
+
+        assertThat(statsService.getWeakAreas()).isEmpty();
     }
 
     @Test
     void shouldExcludeTopicsWithNoAttemptsFromWeakAreas() {
-        Problem p1 = problem(1L, "trees");
-        Problem p2 = problem(2L, "dp");
+        // 3 problems in trees (all reviewed, low accuracy) and 3 in dp (none attempted)
+        Problem t1 = problem(1L, "trees"); Problem t2 = problem(2L, "trees"); Problem t3 = problem(3L, "trees");
+        Problem d1 = problem(4L, "dp");    Problem d2 = problem(5L, "dp");    Problem d3 = problem(6L, "dp");
 
-        UserProgress attempted   = progressForProblem(p1, 5, 2, 2.5, 0);
-        UserProgress unattempted = progressForProblem(p2, 0, 0, 2.5, 0);
+        List<UserProgress> progress = List.of(
+                progressForProblem(t1, 5, 2, 2.5, 0),
+                progressForProblem(t2, 5, 2, 2.5, 0),
+                progressForProblem(t3, 5, 2, 2.5, 0),
+                progressForProblem(d1, 0, 0, 2.5, 0),
+                progressForProblem(d2, 0, 0, 2.5, 0),
+                progressForProblem(d3, 0, 0, 2.5, 0));
 
-        when(problemRepository.findAll()).thenReturn(List.of(p1, p2));
-        when(userProgressRepository.findAll()).thenReturn(List.of(attempted, unattempted));
+        when(problemRepository.findAll()).thenReturn(List.of(t1, t2, t3, d1, d2, d3));
+        when(userProgressRepository.findAll()).thenReturn(progress);
 
         List<TopicStatsDto> weakAreas = statsService.getWeakAreas();
 
@@ -245,15 +294,18 @@ class StatsServiceTest {
 
     @Test
     void shouldLimitWeakAreasToFiveTopics() {
-        // Create 7 topics each with at least one attempt
-        List<Problem> problems = List.of(
-                problem(1L, "trees"), problem(2L, "dp"), problem(3L, "graphs"),
-                problem(4L, "arrays"), problem(5L, "stacks"), problem(6L, "heaps"),
-                problem(7L, "greedy"));
-
-        List<UserProgress> progress = problems.stream()
-                .map(p -> progressForProblem(p, 10, 5, 2.5, 0))
-                .toList();
+        // 7 topics each with 3 reviewed problems at 50% accuracy (all qualify as weak)
+        String[] topics = {"trees", "dp", "graphs", "arrays", "stacks", "heaps", "greedy"};
+        List<Problem> problems = new java.util.ArrayList<>();
+        List<UserProgress> progress = new java.util.ArrayList<>();
+        long id = 1L;
+        for (String topic : topics) {
+            for (int i = 0; i < 3; i++) {
+                Problem p = problem(id++, topic);
+                problems.add(p);
+                progress.add(progressForProblem(p, 10, 5, 2.5, 0)); // 50% < 70%
+            }
+        }
 
         when(problemRepository.findAll()).thenReturn(problems);
         when(userProgressRepository.findAll()).thenReturn(progress);

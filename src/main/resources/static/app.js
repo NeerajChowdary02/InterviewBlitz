@@ -313,7 +313,7 @@ const App = (() => {
     function renderWeakAreas(weakAreas) {
         const container = document.getElementById('weak-areas-list');
         if (!weakAreas.length) {
-            container.innerHTML = '<div style="color:var(--muted);font-size:0.9rem;text-align:center;padding:12px 0">No attempted topics yet.</div>';
+            container.innerHTML = '<div style="color:var(--muted);font-size:0.9rem;text-align:center;padding:12px 0">No weak areas yet — keep reviewing!</div>';
             return;
         }
         container.innerHTML = weakAreas.map(t => topicRowHtml(t, true)).join('');
