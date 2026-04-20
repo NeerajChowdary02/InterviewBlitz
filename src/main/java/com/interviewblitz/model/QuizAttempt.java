@@ -1,5 +1,6 @@
 package com.interviewblitz.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -9,6 +10,7 @@ import java.time.LocalDateTime;
  * The spaced-repetition algorithm reads these rows to decide how well
  * the user knows each problem and when it should appear again.
  */
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 @Entity
 @Table(name = "quiz_attempts")
 public class QuizAttempt {

@@ -1,5 +1,6 @@
 package com.interviewblitz.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -8,6 +9,7 @@ import java.time.LocalDateTime;
  * Each problem gets four questions — one per category: PATTERN, COMPLEXITY, EDGE_CASE, APPROACH.
  * Questions are generated once and reused across quiz sessions.
  */
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 @Entity
 @Table(name = "questions")
 public class Question {

@@ -1,5 +1,6 @@
 package com.interviewblitz.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -11,6 +12,7 @@ import java.time.LocalDateTime;
  * One row exists per problem; it is created the first time the user answers
  * a question for that problem.
  */
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 @Entity
 @Table(name = "user_progress")
 public class UserProgress {

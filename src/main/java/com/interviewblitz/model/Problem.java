@@ -1,5 +1,6 @@
 package com.interviewblitz.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -9,6 +10,7 @@ import java.time.LocalDateTime;
  * The topic field stores a simplified category (e.g. "trees", "dp") derived from
  * LeetCode's raw topic tags.
  */
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 @Entity
 @Table(name = "problems")
 public class Problem {
