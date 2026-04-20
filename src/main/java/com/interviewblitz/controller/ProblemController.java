@@ -70,4 +70,26 @@ public class ProblemController {
                 .collect(Collectors.groupingBy(Problem::getTopic));
         return ResponseEntity.ok(groupedByTopic);
     }
+
+    /**
+     * Re-applies the NeetCode-style topic mapping to every problem already in the
+     * database without making any LeetCode API calls. Use this after updating the
+     * topic-mapping logic to backfill existing rows.
+     * Example: PUT /api/sync/topics
+     */
+    @PutMapping("/sync/topics")
+    public ResponseEntity<Map<String, Object>> remapTopics() {
+        try {
+            int updated = leetCodeSyncService.remapAllTopicsInDatabase();
+            return ResponseEntity.ok(Map.of(
+                    "status", "success",
+                    "problemsUpdated", updated
+            ));
+        } catch (RuntimeException e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "status", "error",
+                    "message", e.getMessage()
+            ));
+        }
+    }
 }
