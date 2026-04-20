@@ -61,6 +61,12 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
+        <!-- Spring Security: HTTP Basic authentication -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
         <!-- Spring Boot Test: JUnit 5, Mockito, MockMvc -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

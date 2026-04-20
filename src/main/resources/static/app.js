@@ -38,9 +38,102 @@ const App = (() => {
         toastTimer = setTimeout(() => el.classList.remove('show'), duration);
     }
 
+    // ── Auth ─────────────────────────────────────────────────────────────────
+    // Credentials are stored in sessionStorage so a page reload within the same
+    // browser tab doesn't require re-entering them.
+    let _authHeader = sessionStorage.getItem('ib_auth') || null;
+    let _credentialPromise = null;  // deduplicate concurrent 401 prompts
+
+    function buildAuthHeader(username, password) {
+        return 'Basic ' + btoa(unescape(encodeURIComponent(username + ':' + password)));
+    }
+
+    function promptCredentials(errorMsg = null) {
+        // If a prompt is already visible, all callers share the same promise
+        if (_credentialPromise) return _credentialPromise;
+
+        _credentialPromise = new Promise(resolve => {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = [
+                'position:fixed;inset:0;background:rgba(0,0,0,0.72)',
+                'display:flex;align-items:center;justify-content:center;z-index:9999',
+                'padding:16px;box-sizing:border-box',
+            ].join(';');
+
+            const errorHtml = errorMsg
+                ? `<div style="color:#e74c3c;font-size:0.83rem;margin-bottom:14px">${errorMsg}</div>`
+                : '';
+
+            overlay.innerHTML = `
+              <div style="background:#0f3460;border:1px solid #1e4d80;border-radius:16px;
+                          padding:32px 24px;width:min(340px,100%);color:#e2e2e2">
+                <div style="font-size:1.3rem;font-weight:700;color:#16c79a;margin-bottom:4px">
+                  InterviewBlitz
+                </div>
+                <div style="font-size:0.85rem;color:#8892a4;margin-bottom:22px">
+                  Sign in to continue
+                </div>
+                ${errorHtml}
+                <input id="auth-user" type="text" placeholder="Username"
+                  autocomplete="username" spellcheck="false"
+                  style="display:block;width:100%;padding:13px 14px;background:#1a1a2e;
+                         border:1px solid #1e4d80;border-radius:9px;color:#e2e2e2;
+                         font-size:1rem;margin-bottom:10px;outline:none;box-sizing:border-box">
+                <input id="auth-pass" type="password" placeholder="Password"
+                  autocomplete="current-password"
+                  style="display:block;width:100%;padding:13px 14px;background:#1a1a2e;
+                         border:1px solid #1e4d80;border-radius:9px;color:#e2e2e2;
+                         font-size:1rem;margin-bottom:22px;outline:none;box-sizing:border-box">
+                <button id="auth-submit"
+                  style="display:block;width:100%;padding:14px;background:#16c79a;
+                         color:#0d0d1a;border:none;border-radius:10px;font-size:1rem;
+                         font-weight:700;cursor:pointer;min-height:48px">
+                  Sign In
+                </button>
+              </div>`;
+
+            document.body.appendChild(overlay);
+
+            const userInput = overlay.querySelector('#auth-user');
+            const passInput = overlay.querySelector('#auth-pass');
+            const submitBtn = overlay.querySelector('#auth-submit');
+
+            function attempt() {
+                const u = userInput.value.trim();
+                const p = passInput.value;
+                if (!u || !p) return;
+                _authHeader = buildAuthHeader(u, p);
+                sessionStorage.setItem('ib_auth', _authHeader);
+                document.body.removeChild(overlay);
+                _credentialPromise = null;
+                resolve();
+            }
+
+            submitBtn.addEventListener('click', attempt);
+            passInput.addEventListener('keydown', e => { if (e.key === 'Enter') attempt(); });
+            userInput.addEventListener('keydown', e => { if (e.key === 'Enter') passInput.focus(); });
+            setTimeout(() => userInput.focus(), 60);
+        });
+
+        return _credentialPromise;
+    }
+
     // ── API helpers ─────────────────────────────────────────────────────────
     async function api(path, options = {}) {
-        const res = await fetch(path, options);
+        const headers = { ...(options.headers || {}) };
+        if (_authHeader) headers['Authorization'] = _authHeader;
+
+        const res = await fetch(path, { ...options, headers, credentials: 'include' });
+
+        if (res.status === 401) {
+            // Credentials missing or wrong — clear stale auth and prompt
+            const wasAuthed = !!_authHeader;
+            _authHeader = null;
+            sessionStorage.removeItem('ib_auth');
+            await promptCredentials(wasAuthed ? 'Incorrect credentials — please try again.' : null);
+            return api(path, options);  // retry with new credentials
+        }
+
         if (!res.ok) {
             const body = await res.json().catch(() => ({}));
             throw new Error(body.error || `HTTP ${res.status}`);
