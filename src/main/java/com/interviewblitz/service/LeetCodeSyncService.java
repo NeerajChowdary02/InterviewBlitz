@@ -11,7 +11,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -44,6 +47,9 @@ public class LeetCodeSyncService {
             "{ \"query\": \"query { matchedUser(username: \\\"%s\\\") { submitStatsGlobal { acSubmissionNum { difficulty count } } } }\" }";
 
     // Query 2: paginated solved problem list — returns full metadata so no detail fetch is needed
+    private static final String QUESTION_TAGS_QUERY =
+            "query questionData($titleSlug: String!) { question(titleSlug: $titleSlug) { topicTags { name } } }";
+
     private static final String PROBLEMSET_QUERY =
             "query problemsetQuestionList($categorySlug: String, $limit: Int, $skip: Int, $filters: QuestionListFilterInput) { " +
             "problemsetQuestionList: questionList(categorySlug: $categorySlug, limit: $limit, skip: $skip, filters: $filters) { " +
@@ -311,81 +317,83 @@ public class LeetCodeSyncService {
 
     /**
      * Applies NeetCode-style category rules against a set of raw LeetCode tag names.
-     * Rules are evaluated in priority order so more specific categories win over
-     * broader ones (e.g. "Sliding Window" beats "Arrays & Hashing").
+     * Rules are evaluated in priority order: specific/rare patterns first, broad tags
+     * (Array, Hash Table) last so they don't swallow everything.
+     *
+     * Key constraint: DFS/BFS are NOT used to match Graphs because tree problems also
+     * carry those tags. Only explicit "Graph", "Union Find", or "Topological Sort" tags
+     * signal a graph problem.
      */
     String resolveNeetCodeCategory(Set<String> tags) {
-        // 1. Two Pointers — before Arrays & Hashing
-        if (tags.contains("Two Pointers"))
-            return "Two Pointers";
-
-        // 2. Sliding Window — before Arrays & Hashing
+        // 1. Sliding Window
         if (tags.contains("Sliding Window"))
             return "Sliding Window";
 
-        // 3. Stack
-        if (tags.contains("Stack") || tags.contains("Monotonic Stack"))
-            return "Stack";
+        // 2. Two Pointers
+        if (tags.contains("Two Pointers"))
+            return "Two Pointers";
 
-        // 4. Binary Search
-        if (tags.contains("Binary Search"))
-            return "Binary Search";
-
-        // 5. Linked List
-        if (tags.contains("Linked List") || tags.contains("Doubly-Linked List"))
-            return "Linked List";
-
-        // 6. Trees
-        if (tags.contains("Tree") || tags.contains("Binary Tree") || tags.contains("Binary Search Tree"))
-            return "Trees";
-
-        // 7. Heap / Priority Queue — before Arrays & Hashing
+        // 3. Heap / Priority Queue
         if (tags.contains("Heap (Priority Queue)"))
             return "Heap / Priority Queue";
 
-        // 8. Backtracking
-        if (tags.contains("Backtracking"))
-            return "Backtracking";
-
-        // 9. Tries
+        // 4. Tries
         if (tags.contains("Trie"))
             return "Tries";
 
-        // 10. Advanced Graphs — before general Graphs
-        if (tags.contains("Shortest Path") || tags.contains("Minimum Spanning Tree"))
-            return "Advanced Graphs";
+        // 5. Backtracking
+        if (tags.contains("Backtracking"))
+            return "Backtracking";
 
-        // 11. Graphs
-        if (tags.contains("Graph") || tags.contains("Depth-First Search") ||
-                tags.contains("Breadth-First Search") || tags.contains("Union Find") ||
-                tags.contains("Topological Sort"))
-            return "Graphs";
+        // 6. Bit Manipulation
+        if (tags.contains("Bit Manipulation"))
+            return "Bit Manipulation";
 
-        // 12. 2-D DP — must check before 1-D DP; any matrix/grid hint signals 2-D
-        if (tags.contains("Dynamic Programming") && tags.contains("Matrix"))
-            return "2-D Dynamic Programming";
-
-        // 13. 1-D DP
-        if (tags.contains("Dynamic Programming"))
-            return "1-D Dynamic Programming";
-
-        // 14. Greedy
-        if (tags.contains("Greedy"))
-            return "Greedy";
-
-        // 15. Intervals — tag name contains "Interval" or is "Line Sweep"
+        // 7. Intervals — tag name contains "Interval" or is "Line Sweep"
         if (tags.stream().anyMatch(t -> t.contains("Interval") || t.equals("Line Sweep")))
             return "Intervals";
 
-        // 16. Bit Manipulation
-        if (tags.contains("Bit Manipulation"))
-            return "Bit Manipulation";
+        // 8. Greedy
+        if (tags.contains("Greedy"))
+            return "Greedy";
+
+        // 9. Advanced Graphs — before general Graphs
+        if (tags.contains("Shortest Path") || tags.contains("Minimum Spanning Tree"))
+            return "Advanced Graphs";
+
+        // 10. Graphs — only explicit graph tags; DFS/BFS excluded because trees use them too
+        if (tags.contains("Graph") || tags.contains("Union Find") || tags.contains("Topological Sort"))
+            return "Graphs";
+
+        // 11. Trees
+        if (tags.contains("Tree") || tags.contains("Binary Tree") || tags.contains("Binary Search Tree"))
+            return "Trees";
+
+        // 12. Linked List
+        if (tags.contains("Linked List") || tags.contains("Doubly-Linked List"))
+            return "Linked List";
+
+        // 13. Binary Search
+        if (tags.contains("Binary Search"))
+            return "Binary Search";
+
+        // 14. Stack
+        if (tags.contains("Stack") || tags.contains("Monotonic Stack"))
+            return "Stack";
+
+        // 15. 1-D Dynamic Programming — check before 2-D so the Matrix guard is meaningful
+        if (tags.contains("Dynamic Programming") && !tags.contains("Matrix"))
+            return "1-D Dynamic Programming";
+
+        // 16. 2-D Dynamic Programming
+        if (tags.contains("Dynamic Programming") && tags.contains("Matrix"))
+            return "2-D Dynamic Programming";
 
         // 17. Math & Geometry
         if (tags.contains("Math") || tags.contains("Geometry") || tags.contains("Number Theory"))
             return "Math & Geometry";
 
-        // 18. Arrays & Hashing — broad fallback for array-family tags
+        // 18. Arrays & Hashing — broad fallback; must stay near the bottom
         if (tags.contains("Array") || tags.contains("Hash Table") || tags.contains("Matrix") ||
                 tags.contains("Counting") || tags.contains("Sorting") || tags.contains("Simulation"))
             return "Arrays & Hashing";
@@ -394,61 +402,92 @@ public class LeetCodeSyncService {
     }
 
     /**
-     * Translates every problem's topic from the old simplified category names to the
-     * new NeetCode-style names using a deterministic mapping applied entirely in the
-     * local database — no LeetCode API calls are made.
+     * Re-maps topics for all problems already in the database by fetching each problem's
+     * topic tags from LeetCode's public GraphQL API (no session cookie required — individual
+     * problem data is publicly accessible). Runs 10 requests concurrently via WebFlux to
+     * finish in seconds rather than minutes.
      *
-     * The mapping is lossy for "dp" (cannot distinguish 1-D vs 2-D without original tags)
-     * and "graphs" (cannot detect Advanced Graphs); those edge cases will self-correct on
-     * the next full sync when raw tag data is available again.
+     * The username parameter is accepted for API consistency but is not used; every problem
+     * in the local DB is re-mapped regardless of who solved it.
      *
-     * Returns the number of problems whose topic field was updated.
+     * Returns the number of problems whose topic field changed.
      */
-    public int remapAllTopicsInDatabase() {
-        // Maps each old internal category slug to its new NeetCode display name.
-        Map<String, String> legacyToNeetCode = Map.ofEntries(
-                Map.entry("arrays",        "Arrays & Hashing"),
-                Map.entry("sorting",       "Arrays & Hashing"),
-                Map.entry("two-pointers",  "Two Pointers"),
-                Map.entry("sliding-window","Sliding Window"),
-                Map.entry("stacks",        "Stack"),
-                Map.entry("binary-search", "Binary Search"),
-                Map.entry("linked-lists",  "Linked List"),
-                Map.entry("trees",         "Trees"),
-                Map.entry("heaps",         "Heap / Priority Queue"),
-                Map.entry("backtracking",  "Backtracking"),
-                Map.entry("tries",         "Tries"),
-                Map.entry("graphs",        "Graphs"),
-                Map.entry("union-find",    "Graphs"),
-                Map.entry("dp",            "1-D Dynamic Programming"),
-                Map.entry("greedy",        "Greedy"),
-                Map.entry("other",         "Other")
-        );
-
-        // Also accept already-new values as no-ops so repeated calls are idempotent.
-        Set<String> currentNames = Set.of(
-                "Two Pointers", "Sliding Window", "Stack", "Binary Search", "Linked List",
-                "Trees", "Heap / Priority Queue", "Backtracking", "Tries", "Advanced Graphs",
-                "Graphs", "1-D Dynamic Programming", "2-D Dynamic Programming", "Greedy",
-                "Intervals", "Bit Manipulation", "Math & Geometry", "Arrays & Hashing", "Other"
-        );
-
+    public int remapTopicsFromLeetCode(String username) {
         List<Problem> problems = problemRepository.findAll();
-        int updated = 0;
+        log.info("Starting topic remap for {} DB problems via public LeetCode API", problems.size());
 
-        for (Problem p : problems) {
-            String oldTopic = p.getTopic();
-            if (currentNames.contains(oldTopic)) {
-                continue; // already on new scheme
-            }
-            String newTopic = legacyToNeetCode.getOrDefault(oldTopic, "Other");
-            p.setTopic(newTopic);
-            problemRepository.save(p);
-            log.debug("Remapped problem [{}] topic: {} → {}", p.getLeetcodeId(), oldTopic, newTopic);
-            updated++;
+        // Fetch tags for all problems concurrently (concurrency=10 to stay within rate limits),
+        // then collect into a list before touching JPA to avoid cross-thread session issues.
+        List<Map.Entry<Problem, Set<String>>> fetched = Flux.fromIterable(problems)
+                .flatMap(p -> {
+                    String titleSlug = p.getDescription();
+                    if (titleSlug == null || titleSlug.isBlank()) return Mono.empty();
+                    return fetchPublicTagsMono(titleSlug).map(tags -> Map.entry(p, tags));
+                }, 10)
+                .collectList()
+                .block(Duration.ofMinutes(5));
+
+        if (fetched == null) {
+            log.error("Tag fetch timed out after 5 minutes");
+            return 0;
         }
 
-        log.info("Topic remap complete: {} problems updated", updated);
+        int updated = 0;
+        for (Map.Entry<Problem, Set<String>> entry : fetched) {
+            Problem p = entry.getKey();
+            Set<String> tags = entry.getValue();
+            if (tags.isEmpty()) continue;
+
+            String newTopic = resolveNeetCodeCategory(tags);
+            if (!newTopic.equals(p.getTopic())) {
+                log.debug("Remapped [{}] {}: {} → {}", p.getLeetcodeId(), p.getTitle(), p.getTopic(), newTopic);
+                p.setTopic(newTopic);
+                problemRepository.save(p);
+                updated++;
+            }
+        }
+
+        log.info("Topic remap complete: {} of {} problems updated", updated, problems.size());
         return updated;
+    }
+
+    /**
+     * Fetches the topic tags for a single LeetCode problem using the public GraphQL API.
+     * No session cookie is needed because individual problem metadata is publicly accessible.
+     * Returns an empty set on any failure so callers can safely skip the problem.
+     */
+    private Mono<Set<String>> fetchPublicTagsMono(String titleSlug) {
+        try {
+            ObjectNode variables = objectMapper.createObjectNode();
+            variables.put("titleSlug", titleSlug);
+            ObjectNode body = objectMapper.createObjectNode();
+            body.put("query", QUESTION_TAGS_QUERY);
+            body.set("variables", variables);
+            String requestBody = objectMapper.writeValueAsString(body);
+
+            return webClient.post()
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .map(response -> {
+                        try {
+                            JsonNode tagsNode = objectMapper.readTree(response)
+                                    .path("data").path("question").path("topicTags");
+                            Set<String> tags = new HashSet<>();
+                            if (tagsNode.isArray()) {
+                                for (JsonNode tag : tagsNode) {
+                                    tags.add(tag.path("name").asText());
+                                }
+                            }
+                            return tags;
+                        } catch (Exception e) {
+                            return Set.<String>of();
+                        }
+                    })
+                    .onErrorReturn(Set.of());
+        } catch (Exception e) {
+            log.warn("Could not build request for '{}': {}", titleSlug, e.getMessage());
+            return Mono.just(Set.of());
+        }
     }
 }

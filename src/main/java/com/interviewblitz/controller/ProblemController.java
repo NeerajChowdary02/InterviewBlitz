@@ -72,17 +72,19 @@ public class ProblemController {
     }
 
     /**
-     * Re-applies the NeetCode-style topic mapping to every problem already in the
-     * database without making any LeetCode API calls. Use this after updating the
-     * topic-mapping logic to backfill existing rows.
-     * Example: PUT /api/sync/topics
+     * Re-fetches tag data from LeetCode for the given username and re-applies the
+     * current priority-ordered topic mapping to all existing DB rows. No new problems
+     * are inserted — only the topic field of already-synced problems is updated.
+     * Use this whenever the mapping logic changes to backfill existing rows correctly.
+     * Example: PUT /api/problems/sync/topics/codingknight2625
      */
-    @PutMapping("/sync/topics")
-    public ResponseEntity<Map<String, Object>> remapTopics() {
+    @PutMapping("/sync/topics/{username}")
+    public ResponseEntity<Map<String, Object>> remapTopics(@PathVariable String username) {
         try {
-            int updated = leetCodeSyncService.remapAllTopicsInDatabase();
+            int updated = leetCodeSyncService.remapTopicsFromLeetCode(username);
             return ResponseEntity.ok(Map.of(
                     "status", "success",
+                    "username", username,
                     "problemsUpdated", updated
             ));
         } catch (RuntimeException e) {
