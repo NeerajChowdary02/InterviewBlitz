@@ -273,12 +273,11 @@ const App = (() => {
         const total   = questions.length;
         const pct     = total > 0 ? Math.round(correctCount / total * 100) : 0;
         const scoreEl = document.getElementById('summary-score');
-        scoreEl.textContent = correctCount + '/' + total;
+        scoreEl.textContent = correctCount + '/' + total + ' (' + pct + '%)';
         scoreEl.style.color = pct >= 70 ? 'var(--accent)' : 'var(--wrong)';
 
-        const labels = ['Keep practicing!', 'Good progress!', 'Nice work!', 'Great job!', 'Perfect!'];
-        const labelIdx = Math.min(Math.floor(pct / 25), labels.length - 1);
-        document.getElementById('summary-label').textContent = labels[labelIdx];
+        const labelMap = { 4: 'Perfect! 🎯', 3: 'Great job! 💪', 2: 'Good progress! 📈', 1: 'Keep practicing! 📚', 0: 'Review this topic! 🔄' };
+        document.getElementById('summary-label').textContent = labelMap[correctCount] ?? 'Keep practicing! 📚';
 
         document.getElementById('summary-title').textContent = currentProblem?.title || '';
 
@@ -336,7 +335,7 @@ const App = (() => {
         <div class="topic-row">
           <div class="topic-row-header">
             <span class="topic-name">${escHtml(t.topic || '')}${weakBadge}</span>
-            <span class="topic-pct">${pct}% &bull; ${t.reviewed}/${t.totalProblems}</span>
+            <span class="topic-pct">${pct}% accuracy &bull; ${t.reviewed} of ${t.totalProblems} reviewed</span>
           </div>
           <div class="topic-bar">
             <div class="topic-bar-fill" style="width:${pct}%;background:${barColor}"></div>
