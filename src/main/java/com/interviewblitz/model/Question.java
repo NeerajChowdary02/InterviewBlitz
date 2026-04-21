@@ -5,7 +5,7 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 /**
- * Represents a single AI-generated multiple-choice question tied to a LeetCode problem.
+ * Represents a multiple-choice question tied to a LeetCode problem.
  * Each problem gets four questions — one per category: PATTERN, COMPLEXITY, EDGE_CASE, APPROACH.
  * Questions are generated once and reused across quiz sessions.
  */
